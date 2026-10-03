@@ -62,7 +62,7 @@ runs:
           -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
           "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
     - name: Set up Go
-      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      uses: chainguard-actions/actions-setup-go@9a77a92038d8d751cacaacefd5f0f721560c6cc7 # v6
       with:
         go-version: "1.25"
         cache-dependency-path: ${{ github.action_path }}/go.sum
