@@ -1,0 +1,242 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+package deps
+
+import (
+	"fmt"
+	"math"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/apache/skywalking-eyes/assets"
+	"github.com/apache/skywalking-eyes/pkg/logger"
+)
+
+type CompatibilityMatrix struct {
+	Compatible     []string `yaml:"compatible"`
+	Incompatible   []string `yaml:"incompatible"`
+	WeakCompatible []string `yaml:"weak-compatible"`
+	FSFFree        bool     `yaml:"fsf-free"`
+	OSIApproved    bool     `yaml:"osi-approved"`
+}
+
+var matrices = make(map[string]CompatibilityMatrix)
+
+// requireFSFFree indicates whether a dependency license must be FSF Free/Libre
+// to be considered compatible. It is configured via ConfigDeps.RequireFSFFree
+// and set in Check(). Default is false to preserve backward compatibility.
+var requireFSFFree bool
+
+// requireOSIApproved indicates whether a dependency license must be OSI-approved
+// to be considered compatible. It is configured via ConfigDeps.RequireOSIApproved
+// and set in Check(). Default is false to preserve backward compatibility.
+var requireOSIApproved bool
+
+type LicenseOperator int
+
+const (
+	LicenseOperatorNone LicenseOperator = iota
+	LicenseOperatorAND
+	LicenseOperatorOR
+	LicenseOperatorWITH
+)
+
+func init() {
+	dir := "compatibility"
+	files, err := assets.AssetDir(dir)
+	if err != nil {
+		logger.Log.Fatalln("Failed to list assets/compatibility directory:", err)
+	}
+	for _, file := range files {
+		name := file.Name()
+		matrix := CompatibilityMatrix{}
+		if bytes, err := assets.Asset(filepath.Join(dir, name)); err != nil {
+			logger.Log.Fatalln("Failed to read compatibility file:", name, err)
+		} else if err := yaml.Unmarshal(bytes, &matrix); err != nil {
+			logger.Log.Fatalln("Failed to unmarshal compatibility file:", file, err)
+		}
+		matrices[strings.TrimSuffix(name, filepath.Ext(name))] = matrix
+	}
+}
+
+// applyRequirementFlags sets the internal requirement flags based on the provided config.
+// If config is nil, all requirements are reset to their default (false).
+func applyRequirementFlags(config *ConfigDeps) {
+	requireFSFFree = false
+	requireOSIApproved = false
+	if config != nil {
+		requireFSFFree = config.RequireFSFFree
+		requireOSIApproved = config.RequireOSIApproved
+	}
+}
+
+func Check(mainLicenseSpdxID string, config *ConfigDeps, weakCompatible bool) error {
+	// set requirement flags from project config
+	applyRequirementFlags(config)
+	matrix := matrices[mainLicenseSpdxID]
+
+	report := Report{}
+	if err := Resolve(config, &report); err != nil {
+		return err
+	}
+
+	return CheckWithMatrix(mainLicenseSpdxID, &matrix, &report, weakCompatible)
+}
+
+func compare(list []string, spdxID string) bool {
+	return slices.Contains(list, spdxID)
+}
+
+func isFSFFree(spdxID string) bool {
+	if m, ok := matrices[spdxID]; ok {
+		return m.FSFFree
+	}
+	return false
+}
+
+func isOSIApproved(spdxID string) bool {
+	if m, ok := matrices[spdxID]; ok {
+		return m.OSIApproved
+	}
+	return false
+}
+
+func compareAll(spdxIDs []string, compare func(spdxID string) bool) bool {
+	for _, spdxID := range spdxIDs {
+		if !compare(spdxID) {
+			return false
+		}
+	}
+	return true
+}
+
+func compareAny(spdxIDs []string, compare func(spdxID string) bool) bool {
+	return slices.ContainsFunc(spdxIDs, compare)
+}
+
+func compareCompatible(matrix *CompatibilityMatrix, spdxID string, weakCompatible bool) bool {
+	matched := compare(matrix.Compatible, spdxID)
+	if !matched && weakCompatible {
+		matched = compare(matrix.WeakCompatible, spdxID)
+	}
+	if !matched {
+		return false
+	}
+	// Enforce additional boolean requirements if configured
+	if requireFSFFree && !isFSFFree(spdxID) {
+		return false
+	}
+	if requireOSIApproved && !isOSIApproved(spdxID) {
+		return false
+	}
+	return true
+}
+
+func CheckWithMatrix(mainLicenseSpdxID string, matrix *CompatibilityMatrix, report *Report, weakCompatible bool) error {
+	var incompatibleResults []*Result
+	var unknownResults []*Result
+	for _, result := range append(report.Resolved, report.Skipped...) {
+		operator, spdxIDs := parseLicenseExpression(result.LicenseSpdxID)
+		switch operator {
+		case LicenseOperatorAND:
+			if compareAll(spdxIDs, func(spdxID string) bool {
+				return compareCompatible(matrix, spdxID, weakCompatible)
+			}) {
+				continue
+			}
+			if compareAny(spdxIDs, func(spdxID string) bool {
+				return compare(matrix.Incompatible, spdxID)
+			}) {
+				incompatibleResults = append(incompatibleResults, result)
+			}
+
+		case LicenseOperatorOR:
+			if compareAny(spdxIDs, func(spdxID string) bool {
+				return compareCompatible(matrix, spdxID, weakCompatible)
+			}) {
+				continue
+			}
+			if compareAll(spdxIDs, func(spdxID string) bool {
+				return compare(matrix.Incompatible, spdxID)
+			}) {
+				incompatibleResults = append(incompatibleResults, result)
+			}
+
+		default:
+			if compareCompatible(matrix, spdxIDs[0], weakCompatible) {
+				continue
+			}
+			if incompatible := compare(matrix.Incompatible, spdxIDs[0]); incompatible {
+				incompatibleResults = append(incompatibleResults, result)
+				continue
+			}
+			unknownResults = append(unknownResults, result)
+		}
+	}
+
+	if len(incompatibleResults) > 0 || len(unknownResults) > 0 {
+		dWidth, lWidth := float64(len("Dependency")), float64(len("License"))
+		for _, r := range incompatibleResults {
+			dWidth = math.Max(float64(len(r.Dependency)), dWidth)
+			lWidth = math.Max(float64(len(r.LicenseSpdxID)), lWidth)
+		}
+		for _, r := range unknownResults {
+			dWidth = math.Max(float64(len(r.Dependency)), dWidth)
+			lWidth = math.Max(float64(len(r.LicenseSpdxID)), lWidth)
+		}
+
+		rowTemplate := fmt.Sprintf("%%-%dv | %%%dv\n", int(dWidth), int(lWidth))
+		s := fmt.Sprintf(rowTemplate, "Dependency", "License")
+		s += fmt.Sprintf(rowTemplate, strings.Repeat("-", int(dWidth)), strings.Repeat("-", int(lWidth)))
+		for _, r := range incompatibleResults {
+			s += fmt.Sprintf(rowTemplate, r.Dependency, r.LicenseSpdxID)
+		}
+		for _, r := range unknownResults {
+			s += fmt.Sprintf(rowTemplate, r.Dependency, r.LicenseSpdxID)
+		}
+
+		return fmt.Errorf("the following licenses are unknown or incompatible with the main license, please check manually: %v\n%v", mainLicenseSpdxID, s)
+	}
+
+	return nil
+}
+
+func parseLicenseExpression(s string) (operator LicenseOperator, spdxIDs []string) {
+	if ss := strings.Split(s, " AND "); len(ss) > 1 {
+		return LicenseOperatorAND, ss
+	}
+	if ss := strings.Split(s, " and "); len(ss) > 1 {
+		return LicenseOperatorAND, ss
+	}
+	if ss := strings.Split(s, " OR "); len(ss) > 1 {
+		return LicenseOperatorOR, ss
+	}
+	if ss := strings.Split(s, " or "); len(ss) > 1 {
+		return LicenseOperatorOR, ss
+	}
+	if ss := strings.Split(s, " WITH "); len(ss) > 1 {
+		return LicenseOperatorWITH, ss
+	}
+	if ss := strings.Split(s, " with "); len(ss) > 1 {
+		return LicenseOperatorWITH, ss
+	}
+	return LicenseOperatorNone, []string{s}
+}

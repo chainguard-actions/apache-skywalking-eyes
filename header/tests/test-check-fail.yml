@@ -1,0 +1,32 @@
+name: Test license-eye check mode (failing - missing header)
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: check
+        uses: .
+        with:
+          config: tests/fixtures/nolicense/.licenserc.yaml
+          mode: check
+          log: info
+          token: ""
+        continue-on-error: true
+
+      - name: Assert check failed (missing license header detected)
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: license-eye correctly detected missing license header"
+          elif [ "$OUTCOME" = "success" ]; then
+            echo "FAIL: expected license-eye to fail on file without header"
+            exit 1
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

@@ -1,0 +1,82 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: License Eye Dependency
+description: A full-featured license tool to check and fix license headers and dependencies' licenses.
+branding:
+  icon: book
+  color: orange
+inputs:
+  log:
+    description: The level of log, for example, "debug" or "info"
+    required: false
+    default: info
+  config:
+    description: The configuration file, for example, ".licenserc.yaml"
+    required: false
+    default: .licenserc.yaml
+  mode:
+    description: |
+      Which mode License Eye should be run in. Choices are `check` or `resolve`. The
+      default value is `check`.
+    required: false
+    default: check
+  flags:
+    description: |
+      Extra flags appended to the command, for example, --summary=path/to/template.tmpl
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: Set up Go
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      with:
+        go-version: 1.25
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+    - shell: bash
+      run: make -C $GITHUB_ACTION_PATH/.. install
+    - shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        INPUT_LOG: ${{ inputs.log }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_FLAGS: ${{ inputs.flags }}
+      run: |
+        flags=()
+        if [ -n "$INPUT_FLAGS" ]; then
+          while IFS= read -r -d '' t; do flags+=("$t"); done \
+            < <(printf '%s' "$INPUT_FLAGS" | xargs printf '%s\0')
+        fi
+        license-eye -v "$INPUT_LOG" -c "$INPUT_CONFIG" dependency "$INPUT_MODE" "${flags[@]}"

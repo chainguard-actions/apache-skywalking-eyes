@@ -1,0 +1,20 @@
+name: Test license-eye with debug log level
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: check-debug
+        uses: .
+        with:
+          config: tests/fixtures/debugtest/.licenserc.yaml
+          mode: check
+          log: debug
+          token: ""
+
+      - name: Assert check with debug log passed
+        run: |
+          echo "PASS: license-eye check with debug log level completed successfully"

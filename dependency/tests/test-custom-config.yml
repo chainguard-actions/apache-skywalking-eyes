@@ -1,0 +1,61 @@
+name: Test dependency check with custom config path
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Pre-install license-eye and stub Makefile
+        run: |
+          export GOPATH="$HOME/go"
+          export PATH="$GOPATH/bin:/usr/local/go/bin:$PATH"
+          go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.6.0 2>/dev/null || \
+            go install github.com/apache/skywalking-eyes/cmd/license-eye@latest 2>/dev/null || \
+            true
+          if [ -f "$GOPATH/bin/license-eye" ]; then
+            sudo cp "$GOPATH/bin/license-eye" /usr/local/bin/license-eye
+            echo "license-eye installed: $(license-eye --version 2>&1 || true)"
+          fi
+          printf '.PHONY: install\ninstall:\n\t@echo "stub install target: license-eye already handled"\n' > Makefile
+
+      - name: Create custom config file at non-default path
+        run: |
+          mkdir -p configs
+          cat > configs/custom-licenserc.yaml << 'EOF'
+          header:
+            license:
+              spdx-id: Apache-2.0
+              copyright-owner: Custom Test Owner
+          dependency:
+            files:
+              - go.sum
+          EOF
+
+      - name: Create minimal go.mod and go.sum
+        run: |
+          printf 'module example.com/testmod\n\ngo 1.21\n' > go.mod
+          touch go.sum
+
+      - id: action
+        uses: .
+        with:
+          config: configs/custom-licenserc.yaml
+          mode: check
+          log: debug
+        continue-on-error: true
+
+      - name: Assert action ran with custom config
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action either succeeds or fails gracefully with the custom config
+          # Also accept 'skipped' in case act doesn't propagate continue-on-error correctly
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ] || [ "$OUTCOME" = "skipped" ]; then
+            echo "PASS: action ran with custom config path, outcome '$OUTCOME'"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

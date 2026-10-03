@@ -1,0 +1,60 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Test diff mode - shows changes without applying them
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create unlicensed test file and config for diff mode
+        run: |
+          mkdir -p tests/fixtures/fordiff
+          printf 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("This file needs a license header!")\n}\n' > tests/fixtures/fordiff/nodiff.go
+
+          echo "File content before diff:"
+          cat tests/fixtures/fordiff/nodiff.go
+
+          printf 'header:\n  license:\n    spdx-id: Apache-2.0\n    copyright-owner: Test Owner\n  paths:\n    - "tests/fixtures/fordiff/**"\n' > /tmp/test-licenserc-diff.yaml
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          config: /tmp/test-licenserc-diff.yaml
+          mode: diff
+          log: info
+
+      - name: Assert diff mode ran and did not modify the file
+        run: |
+          echo "File content after diff (should be unchanged):"
+          cat tests/fixtures/fordiff/nodiff.go
+
+          # In diff mode, the file should NOT be modified (unlike fix mode)
+          # The file should still start with "package main" (no license header prepended)
+          FIRST_LINE=$(head -1 tests/fixtures/fordiff/nodiff.go | tr -d '[:space:]')
+          echo "First line (trimmed): '$FIRST_LINE'"
+
+          if [ "$FIRST_LINE" = "packagemain" ]; then
+            echo "PASS: diff mode did not modify the file (file still lacks license header)"
+          else
+            echo "FAIL: diff mode should not have modified the file, but first line changed to: $FIRST_LINE"
+            exit 1
+          fi

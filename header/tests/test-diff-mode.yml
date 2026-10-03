@@ -1,0 +1,31 @@
+name: Test license-eye diff mode
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: diff
+        uses: .
+        with:
+          config: tests/fixtures/difftest/.licenserc.yaml
+          mode: diff
+          log: info
+          token: ""
+        continue-on-error: true
+
+      - name: Assert diff mode ran and did not modify the file
+        env:
+          OUTCOME: ${{ steps.diff.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # diff mode may exit non-zero when there are differences, that's expected
+          # The key assertion is that the file was NOT modified (diff mode is read-only)
+          if grep -q "Licensed" "$GITHUB_WORKSPACE/tests/fixtures/difftest/hello.go"; then
+            echo "FAIL: diff mode should not have modified the file"
+            exit 1
+          fi
+          echo "PASS: diff mode ran and did not modify the file"
+          echo "outcome was: $OUTCOME (non-zero exit is expected when diffs exist)"

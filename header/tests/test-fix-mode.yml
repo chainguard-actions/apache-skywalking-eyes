@@ -1,0 +1,29 @@
+name: Test license-eye fix mode
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: fix
+        uses: .
+        with:
+          config: tests/fixtures/tofix/.licenserc.yaml
+          mode: fix
+          log: info
+          token: ""
+
+      - name: Assert fix added license header
+        run: |
+          echo "Checking if license header was added..."
+          if grep -q "Apache License" "$GITHUB_WORKSPACE/tests/fixtures/tofix/hello.go" || \
+             grep -q "Apache-2.0" "$GITHUB_WORKSPACE/tests/fixtures/tofix/hello.go" || \
+             grep -q "Licensed" "$GITHUB_WORKSPACE/tests/fixtures/tofix/hello.go"; then
+            echo "PASS: license header was added by fix mode"
+          else
+            echo "FAIL: license header was not added"
+            cat "$GITHUB_WORKSPACE/tests/fixtures/tofix/hello.go"
+            exit 1
+          fi

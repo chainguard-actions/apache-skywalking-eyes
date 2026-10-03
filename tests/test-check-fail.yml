@@ -1,0 +1,55 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Test check mode - files missing license headers
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create unlicensed test file and config
+        run: |
+          mkdir -p tests/fixtures/unlicensed
+          printf 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("This file has no license header!")\n}\n' > tests/fixtures/unlicensed/nolicense.go
+
+          printf 'header:\n  license:\n    spdx-id: Apache-2.0\n    copyright-owner: Test Owner\n  paths:\n    - "tests/fixtures/unlicensed/**"\n' > /tmp/test-licenserc-fail.yaml
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          config: /tmp/test-licenserc-fail.yaml
+          mode: check
+          log: info
+
+      - name: Assert check failed (as expected for unlicensed files)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action correctly failed when files are missing license headers"
+          elif [ "$OUTCOME" = "success" ]; then
+            echo "FAIL: action should have failed for files without license headers"
+            exit 1
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
